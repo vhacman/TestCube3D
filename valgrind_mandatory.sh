@@ -1,4 +1,12 @@
 #!/bin/bash
+# =============================================================================
+# VALGRIND SUITE — CUB3D MANDATORY
+# Strategy:
+#   - Error cases  : valgrind with timeout 10s  (program exits quickly)
+#   - Valid maps   : no display needed — program will exit with mlx error
+#                    in headless env, which is enough to check leaks
+#                    If DISPLAY is set, use "leaks" tool instead (macOS)
+# =============================================================================
 CUB3D="${1:-./cub3D}"
 MAPS="${2:-./maps}"
 RED='\033[0;31m'
@@ -11,6 +19,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 VOPT="valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=42 -q"
+
 test_error()
 {
 	local desc="$1"
@@ -19,10 +28,10 @@ test_error()
 	TOTAL=$((TOTAL + 1))
 	echo -e "${CYAN}[TEST $TOTAL]${NC} ${BOLD}${desc}${NC}"
 	echo "  CMD: $cmd"
-	OUTPUT=$(timeout 5s $VOPT $cmd 2>&1)
+	OUTPUT=$(timeout 10s $VOPT $cmd 2>&1)
 	EXIT_CODE=$?
 	if [ $EXIT_CODE -eq 124 ]; then
-		echo -e "  ${RED}TIMEOUT${NC}"
+		echo -e "  ${RED}TIMEOUT 10s — error case should exit immediately${NC}"
 		FAIL=$((FAIL + 1))
 		echo ""
 		return
@@ -61,6 +70,7 @@ test_error()
 	fi
 	echo ""
 }
+
 test_args()
 {
 	local desc="$1"
@@ -68,7 +78,7 @@ test_args()
 	TOTAL=$((TOTAL + 1))
 	echo -e "${CYAN}[TEST $TOTAL]${NC} ${BOLD}${desc}${NC}"
 	echo "  CMD: $cmd"
-	OUTPUT=$(timeout 3s $VOPT $cmd 2>&1)
+	OUTPUT=$(timeout 10s $VOPT $cmd 2>&1)
 	EXIT_CODE=$?
 	VALGRIND_ERROR=0
 	if echo "$OUTPUT" | grep -q "ERROR SUMMARY: [^0]"; then VALGRIND_ERROR=1; fi
@@ -84,6 +94,9 @@ test_args()
 	fi
 	echo ""
 }
+
+# Valid maps: run WITHOUT display so mlx fails fast, then check leaks
+# On macOS with display: use "leaks" tool on the running process instead
 test_valid_noleak()
 {
 	local desc="$1"
@@ -91,16 +104,19 @@ test_valid_noleak()
 	TOTAL=$((TOTAL + 1))
 	echo -e "${CYAN}[TEST $TOTAL]${NC} ${BOLD}${desc}${NC}"
 	echo "  CMD: $cmd"
-	OUTPUT=$(timeout 5s $VOPT $cmd 2>&1)
+	# Run without DISPLAY to force immediate mlx exit
+	OUTPUT=$(timeout 10s env -i HOME="$HOME" PATH="$PATH" $VOPT $cmd 2>&1)
 	EXIT_CODE=$?
 	if [ $EXIT_CODE -eq 124 ]; then
-		echo -e "  ${YELLOW}TIMEOUT — normal if display available${NC}"
-		PASS=$((PASS + 1))
+		echo -e "  ${YELLOW}TIMEOUT — try running with DISPLAY unset manually${NC}"
+		echo -e "  ${YELLOW}  DISPLAY= $cmd${NC}"
+		FAIL=$((FAIL + 1))
 		echo ""
 		return
 	fi
 	if echo "$OUTPUT" | grep -qi "segmentation\|double free\|invalid read\|invalid write"; then
 		echo -e "  ${RED}CRASH detected${NC}"
+		echo "$OUTPUT" | grep -i "segmentation\|double free\|invalid"
 		FAIL=$((FAIL + 1))
 		echo ""
 		return
@@ -113,11 +129,12 @@ test_valid_noleak()
 		echo "$OUTPUT" | grep -A5 "ERROR SUMMARY"
 		FAIL=$((FAIL + 1))
 	else
-		echo -e "  ${GREEN}PASS${NC} — no leak"
+		echo -e "  ${GREEN}PASS${NC} — no leak (mlx exited cleanly in headless mode)"
 		PASS=$((PASS + 1))
 	fi
 	echo ""
 }
+
 setup_test_maps()
 {
 	local dir="$1"
@@ -319,6 +336,7 @@ C 225,30,0
 111
 MAPEOF
 }
+
 echo ""
 echo -e "${BOLD}============================================================${NC}"
 echo -e "${BOLD}  VALGRIND SUITE — CUB3D MANDATORY — $(date)${NC}"
@@ -356,7 +374,10 @@ test_error "Multiple players (S and N)" "$CUB3D $MAPS/multiple_player.cub" ""
 test_error "Small map no player" "$CUB3D $MAPS/small_map.cub" ""
 echo -e "${BOLD}--- SECTION 5: EDGE CASES ---${NC}"; echo ""
 test_args "Path to directory" "$CUB3D $MAPS/"
-echo -e "${BOLD}--- SECTION 6: VALID MAPS (leak check) ---${NC}"; echo ""
+echo -e "${BOLD}--- SECTION 6: VALID MAPS (headless leak check) ---${NC}"
+echo -e "${YELLOW}Running without DISPLAY — mlx will fail init and exit immediately.${NC}"
+echo -e "${YELLOW}This is expected and lets valgrind check for leaks on exit path.${NC}"
+echo ""
 for map in test valid_map valid_map2 valid_map3 valid_map4 valid_map5; do
 	if [ -f "$MAPS/${map}.cub" ]; then
 		test_valid_noleak "${map}.cub" "$CUB3D $MAPS/${map}.cub"
